@@ -1,1 +1,389 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
 
+    <title>Lieferprobleme v1</title>
+
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.0.2/dist/css/bootstrap.min.css" />
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.0.2/dist/js/bootstrap.bundle.min.js" defer></script>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.5.0/font/bootstrap-icons.css" />
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/moment.js/2.29.1/moment.min.js" defer></script>
+    <style>
+      body {
+        height: 100vh;
+        overflow-x: hidden;
+      }
+
+      /* order cards */
+      .order-card {
+        border-left: 4px solid rgba(0, 0, 0, 0.125);
+      }
+
+      .sales-order-card {
+        border-left: 4px solid #198754 !important;
+      }
+
+      .blanket-order-card {
+        border-width: 1px !important;
+        border-style: dashed;
+        opacity: 0.8;
+      }
+
+      .purchase-order-card {
+        border-left: 4px solid rgba(0, 0, 0, 0.4) !important;
+        background: rgba(0, 0, 0, 0.05);
+      }
+
+      .order-card.is-problem {
+        border-left: 4px solid #dc3545 !important;
+        color: #dc3545 !important;
+      }
+
+      .order-card .matchcode {
+        white-space: nowrap;
+        text-overflow: ellipsis;
+        max-width: 360px;
+        overflow: hidden;
+        display: block;
+      }
+
+      button[data-bs-toggle='collapse'] i:last-child,
+      button[data-bs-toggle='collapse'].collapsed i:first-child {
+        display: none;
+      }
+      button[data-bs-toggle='collapse'] i:first-child,
+      button[data-bs-toggle='collapse'].collapsed i:last-child {
+        display: inline;
+      }
+      .btn > i {
+        pointer-events: none !important;
+      }
+      .collapse:not(.show) {
+        border: 0;
+      }
+      .collapsing {
+        transition: none !important;
+      }
+
+      .delivery-date-confirmed {
+        color: #198754 !important;
+      }
+      .delivery-date-unconfirmed {
+        font-style: italic !important;
+      }
+    </style>
+  </head>
+  <body class="bg-light">
+    <main>
+      <div class="container p-5">
+        <header id="problem-products-header">
+          <div class="row mb-5">
+            <div class="col">
+              <h4></h4>
+            </div>
+            <div class="col-auto text-end">
+              <button class="btn btn-outline-primary" id="refresh-button" type="button"><i class="bi bi-arrow-clockwise me-2"></i><span>Neuladen</span></button>
+            </div>
+          </div>
+        </header>
+        <div id="problem-products-ordered">
+          <header class="mb-3">
+            <div class="row">
+              <div class="col">
+                <h5></h5>
+              </div>
+              <div class="col-auto text-end">
+                <button class="btn btn-light" type="button" data-bs-toggle="collapse" data-bs-target="#problem-products-ordered-content"><i class="bi bi-chevron-bar-contract"></i><i class="bi bi-chevron-bar-expand"></i></button>
+              </div>
+            </div>
+          </header>
+          <div class="collapse show" id="problem-products-ordered-content"></div>
+        </div>
+        <hr class="my-4" />
+        <div class="pb-5" id="problem-products-not-ordered">
+          <header class="mb-3">
+            <div class="row">
+              <div class="col">
+                <h5></h5>
+              </div>
+              <div class="col-auto text-end">
+                <button class="btn btn-light" type="button" data-bs-toggle="collapse" data-bs-target="#problem-products-not-ordered-content"><i class="bi bi-chevron-bar-contract"></i><i class="bi bi-chevron-bar-expand"></i></button>
+              </div>
+            </div>
+          </header>
+          <div class="collapse show" id="problem-products-not-ordered-content"></div>
+          <div class="pb-5" id="deliverable-orders"></div>
+        </div>
+      </div>
+    </main>
+    <script>
+      // functions
+      function idle(ms = 0) {
+        return new Promise((resolve) => setTimeout(resolve, ms));
+      }
+
+      function formatQuantity(n) {
+        return n.toFixed(0).replace(/\B(?=(\d{3})+(?!\d))/g, '.');
+      }
+
+      // lieferprobleme
+      (async () => {
+        const refreshButton = document.querySelector('#refresh-button');
+
+        refreshButton.addEventListener('click', async function () {
+          refreshButton.disabled = true;
+          refreshButton.classList.add('loading');
+
+          await findProblems();
+
+          refreshButton.classList.remove('loading');
+          refreshButton.disabled = false;
+        });
+
+        refreshButton.click();
+
+        const problemProducts = document.querySelector('#problem-products');
+
+        document.querySelector('main').addEventListener('click', (e) => {
+          e.preventDefault();
+
+          if (e.target.classList.contains('hide-card')) {
+            const card = e.target.parentElement.parentElement.parentElement.parentElement;
+
+            card.style.display = 'none';
+          }
+        });
+      })();
+
+      async function findProblems() {
+        console.log('find problems');
+
+        makeProgressBar();
+
+        const res = await fetch('https://api.art.gmbh/old/product-dispo');
+        const productDispo = await res.json();
+
+        console.log(productDispo);
+
+        let problemProductsCount = 0;
+        let problemProductsOrderedCount = 0;
+        let problemProductsNotOrderedCount = 0;
+
+        let problemProductsOrderedHtml = '';
+        let problemProductsNotOrderedHtml = '';
+
+        const deliverableOrders = [];
+
+        productDispo.forEach((product) => {
+          const productOrderItems = [...product.productSalesOrderPos, ...product.productPurchaseOrderPos, ...product.productBlanketOrderPos];
+          const sortedProductOrderItems = productOrderItems.sort((a, b) => {
+            if (new Date(a.DeliveryDate) - new Date(b.DeliveryDate) === 0) {
+              return b.OrderNumber.localeCompare(a.OrderNumber);
+            } else {
+              return new Date(a.DeliveryDate) - new Date(b.DeliveryDate);
+            }
+          });
+
+          // do we have a problem?
+          let availableQuantity = product.stockQuantity;
+          let hasProblem = false;
+          let productOrderItemsHtml = '';
+          let salesOrderQuantity = 0;
+          let purchaseOrderQuantity = 0;
+
+          sortedProductOrderItems.forEach((productOrderItem) => {
+            const isSalesOrder = productOrderItem.OrderNumber.startsWith('AB');
+            const isPurchaseOrder = productOrderItem.OrderNumber.startsWith('BE');
+            const isBlanketOrder = productOrderItem.OrderNumber.startsWith('AR');
+
+            // math
+            if (isSalesOrder) {
+              salesOrderQuantity += productOrderItem.Quantity;
+              availableQuantity -= productOrderItem.Quantity;
+            } else if (isPurchaseOrder) {
+              purchaseOrderQuantity += productOrderItem.Quantity;
+              availableQuantity += productOrderItem.Quantity;
+            }
+
+            const isProblem = availableQuantity < 0;
+            const cardClass = isSalesOrder ? 'sales-order-card' : isPurchaseOrder ? 'purchase-order-card' : 'blanket-order-card';
+            const customerSupplierNo = isSalesOrder || isBlanketOrder ? productOrderItem.CustomerNumber : productOrderItem.SupplierNumber;
+            // const deliveryDateConfirmed = isSalesOrder ? '' : new Date(productOrderItem.BookingDate) < new Date(productOrderItem.DeliveryDate) ? '<span class="badge rounded-pill bg-success">LT bestätigt</span>' : '<span class="badge rounded-pill bg-secondary">LT unbestätigt</span>'
+            // const orderStatus = productOrderItem.OrderStateDesc ? '<span class="badge rounded-pill bg-warning">' + productOrderItem.OrderStateDesc + '<span>' : ''
+
+            hasProblem = isProblem ? isProblem : hasProblem;
+
+            // deliverable order
+            if (isSalesOrder && !isProblem) {
+              const availableEarlier = new Date(productOrderItem.DeliveryRequestDate) < new Date(productOrderItem.DeliveryDate);
+
+              if (availableEarlier) {
+                deliverableOrders.push(productOrderItem);
+              }
+            }
+
+            // order card
+            if (isSalesOrder || isPurchaseOrder) {
+              productOrderItemsHtml += `
+                <div class="row mb-2">
+                  <div class="col">
+                    <div class="card order-card ${cardClass} ${isSalesOrder && isProblem ? 'is-problem' : ''} shadow-sm">
+                      <div class="card-body">
+                        <div class="row">
+                          <div class="col-auto">
+                            <h6 class="mb-0" style="min-width: 80px;">${productOrderItem.OrderNumber}</h6>
+                            <small class="text-muted">${moment(productOrderItem.BookingDate).format('DD.MM.YYYY')}</small>
+                          </div>
+                          <div class="col-auto">
+                            <h6 class="matchcode mb-0">${productOrderItem.Matchcode}</h6>
+                            <small class="text-muted">${customerSupplierNo}</small>
+                          </div>
+                          <div class="col text-end">
+                            <h6 class="mb-0">${productOrderItem.Username}</h6>
+                            <small class="text-muted">${productOrderItem.OrderStateDesc || '--'}</small>
+                          </div>
+                          <div class="col-auto text-end">
+                            <h6 class="mb-0">${formatQuantity(productOrderItem.Quantity)}</h6>
+                            <small class="text-muted">Pos. ${productOrderItem.PosNumber}</small>
+                          </div>
+                          <div class="col-auto text-end">
+                            <h6 class="mb-0">${moment(productOrderItem.DeliveryDate).format('DD.MM.YYYY')}</h6>
+                            <small class="text-muted">KW ${moment(productOrderItem.DeliveryDate).format('WW[/]YY')}</small>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                  <div class="col-2 text-end py-3">
+                    <h6 class="mb-0 ${isProblem ? 'text-danger' : ''}">${formatQuantity(availableQuantity)}</h6>
+                    <small class="text-muted"></small>
+                  </div>
+                </div>
+              `;
+            } else if (isBlanketOrder) {
+              const confirmedQuantity = productOrderItem.ConfirmedQuantity || 0;
+
+              productOrderItemsHtml += `
+                <div class="row mb-2">
+                  <div class="col">
+                    <div class="card order-card ${cardClass} ${isSalesOrder && isProblem ? 'is-problem' : ''} shadow-sm">
+                      <div class="card-body">
+                        <div class="row">
+                          <div class="col-auto">
+                            <h6 class="mb-0" style="min-width: 80px;">${productOrderItem.OrderNumber}</h6>
+                            <small class="text-muted">${moment(productOrderItem.BookingDate).format('DD.MM.YYYY')}</small>
+                          </div>
+                          <div class="col">
+                            <h6 class="matchcode mb-0">${productOrderItem.Matchcode}</h6>
+                            <small class="text-muted">${customerSupplierNo}</small>
+                          </div>
+                          <div class="col-auto text-end">
+                            <h6 class="mb-0">${formatQuantity(productOrderItem.Quantity)}</h6>
+                            <small class="text-muted">Rahmen</small>
+                          </div>
+                          <div class="col-auto text-end">
+                            <h6 class="mb-0">${formatQuantity(confirmedQuantity)}</h6>
+                            <small class="text-muted">Bestätigt</small>
+                          </div>
+                          <div class="col-auto text-end">
+                            <h6 class="mb-0">${formatQuantity(productOrderItem.Quantity - confirmedQuantity)}</h6>
+                            <small class="text-muted">Offen</small>
+                          </div>
+                          <div class="col-auto text-end">
+                            <h6 class="mb-0">${moment(productOrderItem.DeliveryDate).format('DD.MM.YYYY')}</h6>
+                            <small class="text-muted">KW ${moment(productOrderItem.DeliveryDate).format('WW[/]YY')}</small>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                  <div class="col-2 text-end py-3">
+                    <h6 class="mb-0></h6>
+                    <small class="text-muted"></small>
+                  </div>
+                </div>
+              `;
+            }
+          });
+
+          if (hasProblem) {
+            problemProductsCount++;
+
+            // main product card
+            const productCardHtml = `
+              <div class="card mb-3 shadow-sm">
+                <div class="card-header bg-white b_order-0">
+                  <div class="row">
+                    <div class="col-auto">
+                      <h6 class="mb-0">${product.productNumber}</h6>
+                    </div>
+                    <div class="col">
+                      <h6 class="mb-0">${product.productName1}</h6>
+                      <small class="text-muted">${product.productName2}</small>
+                    </div>
+                    <div class="col-auto text-end">
+                      <h6 class="mb-0">${product.mainSupplier}</h6>
+                      <small class="text-muted">Hauptlieferant</small>
+                    </div>
+                    <div class="col-auto text-end">
+                      <h6 class="mb-0">${formatQuantity(product.stockQuantity)}</h6>
+                      <small class="text-muted">Lager</small>
+                    </div>
+                    <div class="col-auto text-end">
+                      <h6 class="mb-0">${formatQuantity(salesOrderQuantity)}</h6>
+                      <small class="text-muted">Aufträge</small>
+                    </div>
+                    <div class="col-auto text-end">
+                      <h6 class="mb-0">${formatQuantity(purchaseOrderQuantity)}</h6>
+                      <small class="text-muted">Bestellt</small>
+                    </div>
+                    <div class="col-auto">
+                      <button class="btn hide-card" type="button">
+                        <i class="bi bi-eye-slash-fill"></i>
+                      </button>
+                    </div>
+                  </div>
+                </div>
+                <div id="card-${product.productNumber}" class="card-body">
+                  ${productOrderItemsHtml}
+                </div>
+              </div>
+            `;
+            const hasPurchaseOrders = product.productPurchaseOrderPos.length > 0;
+
+            if (hasPurchaseOrders) {
+              problemProductsOrderedCount++;
+              problemProductsOrderedHtml += productCardHtml;
+            } else {
+              problemProductsNotOrderedCount++;
+              problemProductsNotOrderedHtml += productCardHtml;
+            }
+          } else {
+            // no problem, no card
+          }
+        });
+
+        await idle();
+
+        document.querySelector('#problem-products-header h4').innerHTML = 'Artikel mit Lieferproblemen (' + problemProductsCount + ')';
+
+        document.querySelector('#problem-products-ordered header h5').innerHTML = 'Bestellte Artikel (' + problemProductsOrderedCount + ')';
+        document.querySelector('#problem-products-ordered-content').innerHTML = problemProductsOrderedHtml;
+
+        document.querySelector('#problem-products-not-ordered header h5').innerHTML = 'Noch nicht bestellte Artikel (' + problemProductsNotOrderedCount + ')';
+        document.querySelector('#problem-products-not-ordered-content').innerHTML = problemProductsNotOrderedHtml;
+
+        console.log(deliverableOrders);
+      }
+
+      function makeProgressBar() {
+        document.querySelector('#problem-products-header h4').innerHTML = 'Artikel mit Lieferproblemen <div class="spinner-border spinner-border-sm text-primary" role="status"></div>';
+        document.querySelector('#problem-products-ordered header h5').innerHTML = 'Bestellte Artikel <div class="spinner-border spinner-border-sm text-primary" role="status"></div>';
+        document.querySelector('#problem-products-not-ordered header h5').innerHTML = 'Noch nicht bestellte Artikel <div class="spinner-border spinner-border-sm text-primary" role="status"></div>';
+        document.querySelectorAll('#problem-products-ordered-content, #problem-products-not-ordered-content').forEach((h) => (h.innerHTML = 'Wird geladen...'));
+      }
+    </script>
+  </body>
+</html>
